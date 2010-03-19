@@ -41,12 +41,17 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "wrtctl-net.h"
 
 #define SYS_CMDS_MODVER 1
 #define SYS_CMDS_NAME "sys-cmds"
 #define CTX_CAST(x,y) sysh_ctx_t x = (sysh_ctx_t)y
+
+#define ROUTE_PATH "/proc/net/route"
 
 char mod_name[] = SYS_CMDS_NAME;
 char mod_magic_str[MOD_MAGIC_LEN] = "SYS";
@@ -62,7 +67,8 @@ typedef struct sysh_ctx {
     char    *initd_dir;
 } *sysh_ctx_t;
 
-int     sys_cmd_initd   (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
+int     sys_cmd_initd       (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
+int     sys_cmd_route_info  (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
 
 int mod_init(void **mod_ctx){
     int rc = MOD_OK;
@@ -115,6 +121,9 @@ int mod_handler(void *ctx, net_cmd_t cmd, packet_t *outp){
     switch ( cmd->id ){
         case SYS_CMD_INITD:
             rc = sys_cmd_initd(syshc, cmd->value, &out_rc, &out_str);
+            break;
+        case SYS_CMD_ROUTE_INFO:
+            rc = sys_cmd_route_info(syshc, cmd->value, &out_rc, &out_str);
             break;
         default:
             err("sys-cmds_handler:  Unknown command '%u'\n", cmd->id);
@@ -240,3 +249,132 @@ done:
     (*out_rc) = (uint16_t)sys_rc;
     return rc;
 }
+
+/* Network to IP address string */
+int ntoip_str(char *str){
+    int i;
+    int rc = 0;
+    char t;
+    char *s = NULL;
+    struct in_addr addr = {(in_addr_t)0};
+    static char buf[32];
+
+    if ( !str || strlen(str) < 8 || strlen(str) > 30 ){
+        return EINVAL;
+    }
+
+    for ( i = 0; i < 2; i++ ){
+        t = str[6+i];
+        str[6+i] = str[i];
+        str[i] = t;
+
+        t = str[4+i];
+        str[4+i] = str[2+i];
+        str[2+i] = t;
+    }
+    
+    sprintf(buf, "0x%s", str);
+    if ( inet_aton(buf, &addr) == 0 ){
+        *str = '\0';
+        return errno;
+    }
+        
+    s = inet_ntoa(addr);
+    memcpy(str, s, strlen(s)+1);
+    return 0;
+}
+        
+
+/*
+ * Parses /proc/net/route to grab every triplet of
+ * destination, gateway, interface.  Return is a
+ * big string with each triplet on a seperate line
+ * and ip addresses seperated by colons.
+ */
+int sys_cmd_route_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str){
+    int sys_rc = MOD_OK;
+    int rc = 0;
+    FILE *fd = NULL;
+    char t;
+    size_t buflen = 1024;
+    size_t buf_used = 0;
+    char iface[32];
+    char gateway[32];
+    char dest[32];
+
+    if ( access(ROUTE_PATH, R_OK) != 0 ){
+        sys_rc = EPERM;
+        if ( asprintf(out_str, "access:  %s", strerror(errno)) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    }
+
+    if ( !((*out_str) = (char*)malloc(buflen)) ){
+        sys_rc = errno;
+        if ( asprintf(out_str, "malloc:  %s", strerror(errno)) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    }
+
+    if ( !(fd = fopen(ROUTE_PATH, "r")) ){
+        sys_rc = errno;
+        if ( asprintf(out_str, "access: %s", strerror(errno)) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    }
+
+    **out_str = '\0';
+
+    while ( true ) {
+        while ( fgetc(fd) != '\n' ) {;}
+        t = fgetc(fd);
+        if ( feof(fd) != 0 )
+            break;
+        ungetc(t, fd);
+
+        rc = fscanf(fd, "%s\t%s\t%s\t", iface, dest, gateway);
+        if ( rc == 0 )
+            break;
+        else if ( rc < 0 ) {
+            sys_rc = errno;
+            if ( asprintf(out_str, "fscanf: %s", strerror(errno)) == -1 ){
+                err("asprintf: %s\n", strerror(errno));
+                *out_str = NULL;
+            }
+            goto done;
+        }
+        
+        ntoip_str(dest);
+        ntoip_str(gateway);
+
+        if ( (buflen - buf_used - strlen(dest) - strlen(gateway) - strlen(iface) - 3) < 0 ) {
+            if ( !((*out_str) = realloc((*out_str), buflen + 1024)) ){
+                sys_rc = errno;
+                free((*out_str));
+                if ( asprintf(out_str, "realloc: %s", strerror(errno)) == -1 ){
+                    err("asprintf: %s\n", strerror(errno));
+                    *out_str = NULL;
+                }
+                goto done;
+            }
+        }
+        sprintf( (*out_str) + strlen((*out_str)), "%s:%s:%s\n", dest, gateway, iface);
+        buf_used += strlen(dest) + strlen(gateway) + strlen(iface) + 3;
+    }
+    
+    fclose(fd);
+    fd = NULL;
+
+done: 
+    if ( fd )
+        fclose(fd);
+    (*out_rc) = (uint16_t)sys_rc;
+    return rc;
+}
+

@@ -173,6 +173,7 @@ sys_tests=(
     "run"   1   "22, Invalid init command"                  "sys:initd initd.test startblah"
     "run"   1   "1, access:  No such file or directory"     "sys:initd nofile start"
     "run"   1   "1, access:  No such file or directory"     "sys:initd /this/bad/path start"
+    "run"   0   "127.0.0.0:127.0.0.1:lo"                    "sys:route_info"
 )
 
 sys_noexe_tests=(

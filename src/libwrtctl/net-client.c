@@ -200,6 +200,8 @@ int parse_sys_cmd(char *cmdline, packet_t *sp) {
             return EINVAL;
         }
         send = daemon+1;
+    } else if ( !strncmp(cmdline, "route_info", strlen("route_info")) ){
+        id = SYS_CMD_ROUTE_INFO;
     } else {
         fprintf(stderr, "Invalid sys command line.\n");
         return EINVAL;

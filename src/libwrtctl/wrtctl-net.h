@@ -110,10 +110,11 @@ enum mod_errno {
 
 /* System Commands module, NET packet */
 #define SYS_CMDS_MAGIC "SYS"
-#define SYS_CMD_NONE    (uint16_t)0
-#define SYS_CMD_INITD   (uint16_t)1
-#define SYS_CMD_FWVER   (uint16_t)2 /* TODO */
-#define SYS_CMD_MAX     (uint16_t)3
+#define SYS_CMD_NONE        (uint16_t)0
+#define SYS_CMD_INITD       (uint16_t)1
+#define SYS_CMD_FWVER       (uint16_t)2 /* TODO */
+#define SYS_CMD_ROUTE_INFO  (uint16_t)3
+#define SYS_CMD_MAX         (uint16_t)4
 
 /* Daemon Commands built-in, NET packet */
 #define DAEMON_CMD_MAGIC "DAE"
