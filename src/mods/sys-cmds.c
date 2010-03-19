@@ -44,6 +44,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
 
 #include "wrtctl-net.h"
 
@@ -69,6 +71,7 @@ typedef struct sysh_ctx {
 
 int     sys_cmd_initd       (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
 int     sys_cmd_route_info  (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
+int     sys_cmd_ip_info     (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
 
 int mod_init(void **mod_ctx){
     int rc = MOD_OK;
@@ -125,7 +128,10 @@ int mod_handler(void *ctx, net_cmd_t cmd, packet_t *outp){
         case SYS_CMD_ROUTE_INFO:
             rc = sys_cmd_route_info(syshc, cmd->value, &out_rc, &out_str);
             break;
-        default:
+        case SYS_CMD_IP_INFO:
+            rc = sys_cmd_ip_info(syshc, cmd->value, &out_rc, &out_str);
+            break;
+         default:
             err("sys-cmds_handler:  Unknown command '%u'\n", cmd->id);
             out_rc = NET_ERR_INVAL;
             if ( asprintf(&out_str, "Unknown command") == -1 ){
@@ -378,3 +384,75 @@ done:
     return rc;
 }
 
+/*
+ * Returns a list of network interfaces and their ipv4 address.
+ * <interface>:<address>\n
+ */
+int sys_cmd_ip_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str){
+    int sys_rc = MOD_OK;
+    int rc = 0;
+    int sock = -1;
+    struct ifreq *ifreqs = NULL;
+    size_t ifreqs_len = 4 * sizeof(struct ifreq);
+    struct ifconf ic;
+    int i;
+    size_t buf_len = 1024;
+    size_t buf_used = 0;
+
+    if ( !( (*out_str) = (char*)malloc(buf_len)) ){
+        if ( asprintf(out_str, "malloc: %s", strerror(errno)) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    }
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    while ( true ){
+        if ( !(ifreqs = (struct ifreq *)malloc(ifreqs_len)) ){
+            sys_rc = errno;
+            if ( asprintf(out_str, "malloc: %s", strerror(errno)) == -1 ){
+                err("asprintf: %s\n", strerror(errno));
+                *out_str = NULL;
+            }
+            goto done;
+        }
+        ic.ifc_len = ifreqs_len;
+        ic.ifc_req = ifreqs;
+        ioctl(sock, SIOCGIFCONF, &ic);
+        if ( ic.ifc_len == ifreqs_len ) {
+            free(ifreqs);
+            ifreqs_len += 4 * sizeof(struct ifreq);
+            continue;
+        }
+        break;
+    }
+    close(sock);
+    sock = -1;
+
+    **out_str = '\0';
+    for ( i = 0; i < ic.ifc_len/sizeof(struct ifreq); i++ ) {
+        if ( buf_len - buf_used - strlen(ifreqs[i].ifr_name) - 16 ) {
+            if ( !((*out_str) = realloc((*out_str), buf_len + 1024)) ){
+                sys_rc = errno;
+                free((*out_str));
+                if ( asprintf(out_str, "realloc: %s", strerror(errno)) == -1 ){
+                    err("asprintf: %s\n", strerror(errno));
+                    *out_str = NULL;
+                }
+                goto done;
+            }
+        }
+        sprintf( (*out_str) + strlen((*out_str)), "%s:%s\n",
+            ifreqs[i].ifr_name,
+            inet_ntoa( ((struct sockaddr_in*)&ifreqs[i].ifr_addr)->sin_addr ) );
+        buf_used = strlen((*out_str)) + 1;
+    }
+
+done:
+    if ( sock > 0 )
+        close(sock);
+    (*out_rc) = (uint16_t)sys_rc;
+    return rc;
+}
+ 

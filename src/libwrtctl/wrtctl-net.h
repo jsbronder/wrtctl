@@ -114,7 +114,8 @@ enum mod_errno {
 #define SYS_CMD_INITD       (uint16_t)1
 #define SYS_CMD_FWVER       (uint16_t)2 /* TODO */
 #define SYS_CMD_ROUTE_INFO  (uint16_t)3
-#define SYS_CMD_MAX         (uint16_t)4
+#define SYS_CMD_IP_INFO     (uint16_t)4
+#define SYS_CMD_MAX         (uint16_t)5
 
 /* Daemon Commands built-in, NET packet */
 #define DAEMON_CMD_MAGIC "DAE"
