@@ -46,6 +46,7 @@
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
+#include <alloca.h>
 
 #include "wrtctl-net.h"
 
@@ -72,6 +73,7 @@ typedef struct sysh_ctx {
 int     sys_cmd_initd       (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
 int     sys_cmd_route_info  (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
 int     sys_cmd_ip_info     (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
+int     sys_cmd_dns_info    (sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str);
 
 int mod_init(void **mod_ctx){
     int rc = MOD_OK;
@@ -131,7 +133,10 @@ int mod_handler(void *ctx, net_cmd_t cmd, packet_t *outp){
         case SYS_CMD_IP_INFO:
             rc = sys_cmd_ip_info(syshc, cmd->value, &out_rc, &out_str);
             break;
-         default:
+        case SYS_CMD_DNS_INFO:
+            rc = sys_cmd_dns_info(syshc, cmd->value, &out_rc, &out_str);
+            break;
+        default:
             err("sys-cmds_handler:  Unknown command '%u'\n", cmd->id);
             out_rc = NET_ERR_INVAL;
             if ( asprintf(&out_str, "Unknown command") == -1 ){
@@ -455,4 +460,123 @@ done:
     (*out_rc) = (uint16_t)sys_rc;
     return rc;
 }
- 
+
+
+int parse_nameservers(char *path, char **nameservers, char **out_str, bool *has_localhost) {
+    FILE *fd = NULL;
+    char *buf = NULL;
+    size_t nread = 1024;
+    char *ns_list = NULL;
+    size_t ns_list_l = 0;
+    char ns[17];
+    size_t nsl;
+    int rc = 0;
+    char t;
+
+    *has_localhost = false;
+
+    if ( !(buf = (char*)malloc(nread)) ){
+        rc = errno;
+        if ( asprintf(out_str, "malloc: %s", strerror(errno)) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    }
+
+    if ( !(fd = fopen(path, "r")) ){
+        rc = errno;
+        if ( asprintf(out_str, "fopen(%s): %s", path, strerror(errno)) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    }
+
+    while ( true ){
+        rc = fscanf(fd, "nameserver %s[0-9.]", ns);
+        if ( rc == 0 ) {
+            while ( fgetc(fd) != '\n' ) {;}
+            continue;
+        } else if ( rc < 0 ) {
+            if ( feof(fd) != 0 ) {
+                rc = 0;
+                break;
+            }
+            rc = errno;
+            if ( asprintf(out_str, "fscanf: %s", strerror(errno)) == -1 ){
+                err("asprintf: %s\n", strerror(errno));
+                *out_str = NULL;
+            }
+            goto done;
+        }
+        rc = 0;
+
+        if ( (nsl = strnlen(ns, 16)) == 16 ) {
+            rc = EINVAL;
+            if ( asprintf(out_str, "Invalid nameserver: %s", ns) == -1 ){
+                err("asprintf: %s\n", strerror(errno));
+                *out_str = NULL;
+            }
+            goto done;
+        }
+
+        if ( !(ns_list = (char*)realloc(ns_list, nsl+1)) ){
+            rc = errno;
+            if ( asprintf(out_str, "realloc: %s", strerror(errno)) == -1 ){
+                err("asprintf: %s\n", strerror(errno));
+                *out_str = NULL;
+            }
+            goto done;
+        }
+
+        if ( !strncmp(ns, "127.0.0.1", 10) )
+            *has_localhost = true;
+
+        sprintf( ns_list + ns_list_l, "%s\n", ns);
+        ns_list_l += nsl + 1;
+
+        while ( fgetc(fd) != '\n' ) {;}
+    }
+
+    *nameservers = ns_list;
+    ns_list = NULL;
+
+done:
+    if ( buf )
+        free(buf);
+    if ( ns_list )
+        free(ns_list);
+    if ( fd )
+        fclose(fd);
+
+    return rc;
+} 
+    
+
+/*
+ * Returns a list of nameservers.  Checks for /tmp/resolv.conf.auto which is
+ * used by dnsmasq on OpenWRT if 127.0.0.1 is set in /etc/resolv.conf.
+ */
+int sys_cmd_dns_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str){
+    int sys_rc = MOD_OK;
+    bool check_tmp = false;
+    char *nameservers = NULL;
+
+    *out_str = NULL;
+    sys_rc = parse_nameservers("/etc/resolv.conf", &nameservers, out_str, &check_tmp);
+    
+    if ( sys_rc == 0 
+            && check_tmp
+            && !access("/tmp/resolv.conf.auto", R_OK) ){
+        free(nameservers);
+        sys_rc = parse_nameservers("/tmp/resolv.conf.auto", &nameservers, out_str, &check_tmp);
+    }
+    
+    if ( sys_rc == 0 )
+        *out_str = nameservers;
+    *out_rc = sys_rc;
+
+    return 0;
+}
+

@@ -204,7 +204,9 @@ int parse_sys_cmd(char *cmdline, packet_t *sp) {
         id = SYS_CMD_ROUTE_INFO;
     } else if ( !strncmp(cmdline, "ip_info", strlen("ip_info")) ){
         id = SYS_CMD_IP_INFO;
-    } else {
+    } else if ( !strncmp(cmdline, "dns_info", strlen("dns_info")) ){
+        id = SYS_CMD_DNS_INFO;
+     } else {
         fprintf(stderr, "Invalid sys command line.\n");
         return EINVAL;
     }
