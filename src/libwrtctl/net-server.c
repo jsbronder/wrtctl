@@ -251,6 +251,7 @@ int default_server_loop(ns_t ns){
 
             if ( dd_iter->shutdown ){
                 ns->shutdown_dd(ns, dd_iter);
+                free_dd(&dd_iter);
                 continue;
             }
 
@@ -280,8 +281,10 @@ int default_server_loop(ns_t ns){
         }
 
         STAILQ_FOREACH_SAFE(dd_iter, &(ns->dd_list), dd_queue, dd_tmp){
-            if ( dd_iter->shutdown )
+            if ( dd_iter->shutdown ){
                 ns->shutdown_dd(ns, dd_iter);
+                free_dd(&dd_iter);
+            }
         }
     }
 
