@@ -503,19 +503,18 @@ done:
 }
 
 
-int parse_nameservers(char *path, char **nameservers, char **out_str, bool *has_localhost) {
+int parse_nameservers(char *path, char **out_str, bool *has_localhost) {
     FILE *fd = NULL;
     char *buf = NULL;
-    size_t nread = 1024;
-    char *ns_list = NULL;
-    size_t ns_list_l = 0;
-    char ns[17];
-    size_t nsl;
+    char *err = NULL;
+    size_t buf_len, buf_used, nsl;
+    char *p, *realloc_save;
+    char line[1024];
     int rc = 0;
 
     *has_localhost = false;
 
-    if ( !(buf = (char*)malloc(nread)) ){
+    if ( !(buf = (char*)malloc(128)) ){
         rc = errno;
         if ( asprintf(out_str, "malloc: %s", strerror(errno)) == -1 ){
             err("asprintf: %s\n", strerror(errno));
@@ -523,6 +522,9 @@ int parse_nameservers(char *path, char **nameservers, char **out_str, bool *has_
         }
         goto done;
     }
+    buf[0] = '\0';
+    buf_used = 1;
+    buf_len = 128;
 
     if ( !(fd = fopen(path, "r")) ){
         rc = errno;
@@ -533,63 +535,69 @@ int parse_nameservers(char *path, char **nameservers, char **out_str, bool *has_
         goto done;
     }
 
-    while ( true ){
-        rc = fscanf(fd, "nameserver %s[0-9.]", ns);
-        if ( rc == 0 ) {
-            while ( fgetc(fd) != '\n' ) {;}
-            continue;
-        } else if ( rc < 0 ) {
-            if ( feof(fd) != 0 ) {
-                rc = 0;
-                break;
-            }
-            rc = errno;
-            if ( asprintf(out_str, "fscanf: %s", strerror(errno)) == -1 ){
-                err("asprintf: %s\n", strerror(errno));
-                *out_str = NULL;
-            }
-            goto done;
-        }
-        rc = 0;
-
-        if ( (nsl = strnlen(ns, 16)) == 16 ) {
+    while ( fgets(line, 1024, fd) ){
+        if ( strnlen(line, 1023) >= 1023 ) {
             rc = EINVAL;
-            if ( asprintf(out_str, "Invalid nameserver: %s", ns) == -1 ){
-                err("asprintf: %s\n", strerror(errno));
-                *out_str = NULL;
-            }
-            goto done;
+            err = "Parse error, line too long";
+            break;
         }
+       
+        if ( strncmp(line, "nameserver", strlen("nameserver")) )
+            continue;
 
-        if ( !(ns_list = (char*)realloc(ns_list, nsl+1)) ){
-            rc = errno;
-            if ( asprintf(out_str, "realloc: %s", strerror(errno)) == -1 ){
-                err("asprintf: %s\n", strerror(errno));
-                *out_str = NULL;
-            }
-            goto done;
+        if ( !( p = strtok(line, "\t ")) 
+                || !(p = strtok(NULL, "\t \n"))
+                || (nsl = strnlen(p, 31)) >= 31 ) {
+            rc = EINVAL;
+            err = "Parse error, invalid nameserver";
+            break;
         }
-
-        if ( !strncmp(ns, "127.0.0.1", 10) )
+       
+        if ( buf_len < buf_used + nsl + 1 ){
+            realloc_save = realloc(buf, buf_len + 128);
+            if ( !realloc_save ){
+                rc = errno;
+                free(buf);
+                if ( asprintf(out_str, "realloc: %s", strerror(errno)) == -1 ){
+                    err("asprintf: %s\n", strerror(errno));
+                }
+                goto done;
+            }
+            buf = realloc_save;
+            buf_len += 128;
+        }
+        sprintf(buf+buf_used-1, "%s\n", p);
+        buf_used += nsl+1;
+ 
+        if ( !strncmp(p, "127.0.0.1", 10) )
             *has_localhost = true;
-
-        sprintf( ns_list + ns_list_l, "%s\n", ns);
-        ns_list_l += nsl + 1;
-
-        while ( fgetc(fd) != '\n' ) {;}
     }
 
-    *nameservers = ns_list;
-    ns_list = NULL;
+    if ( err != NULL ){
+        if ( asprintf(out_str, "%s", err) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    } 
+
+    if ( !(*out_str = strdup(buf)) ){
+        if ( asprintf(out_str, "strdup: %s", strerror(errno)) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    }
+    free(buf);
+    buf = NULL;
+    fclose(fd);
+    fd = NULL;
 
 done:
     if ( buf )
         free(buf);
-    if ( ns_list )
-        free(ns_list);
     if ( fd )
         fclose(fd);
-
     return rc;
 } 
     
@@ -601,22 +609,19 @@ done:
 int sys_cmd_dns_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_str){
     int sys_rc = MOD_OK;
     bool check_tmp = false;
-    char *nameservers = NULL;
 
     *out_str = NULL;
-    sys_rc = parse_nameservers("/etc/resolv.conf", &nameservers, out_str, &check_tmp);
+    sys_rc = parse_nameservers("/etc/resolv.conf", out_str, &check_tmp);
     
     if ( sys_rc == 0 
             && check_tmp
             && !access("/tmp/resolv.conf.auto", R_OK) ){
-        free(nameservers);
-        sys_rc = parse_nameservers("/tmp/resolv.conf.auto", &nameservers, out_str, &check_tmp);
+        if ( *out_str )
+            free(*out_str);
+        sys_rc = parse_nameservers("/tmp/resolv.conf.auto", out_str, &check_tmp);
     }
     
-    if ( sys_rc == 0 )
-        *out_str = nameservers;
     *out_rc = sys_rc;
-
     return 0;
 }
 
