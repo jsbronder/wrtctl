@@ -263,8 +263,6 @@ done:
 
 /* Network to IP address string */
 int ntoip_str(char *str){
-    int i;
-    char t;
     char *s = NULL;
     struct in_addr addr = {(in_addr_t)0};
     static char buf[32];
@@ -273,22 +271,13 @@ int ntoip_str(char *str){
         return EINVAL;
     }
 
-    for ( i = 0; i < 2; i++ ){
-        t = str[6+i];
-        str[6+i] = str[i];
-        str[i] = t;
-
-        t = str[4+i];
-        str[4+i] = str[2+i];
-        str[2+i] = t;
-    }
-    
     sprintf(buf, "0x%s", str);
     if ( inet_aton(buf, &addr) == 0 ){
         *str = '\0';
         return errno;
     }
-       
+      
+    addr.s_addr = ntohl(addr.s_addr);
     s = inet_ntoa(addr);
     memcpy(str, s, strlen(s)+1);
     return 0;
