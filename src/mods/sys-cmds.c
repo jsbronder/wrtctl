@@ -264,7 +264,6 @@ done:
 /* Network to IP address string */
 int ntoip_str(char *str){
     int i;
-    int rc = 0;
     char t;
     char *s = NULL;
     struct in_addr addr = {(in_addr_t)0};
@@ -289,7 +288,7 @@ int ntoip_str(char *str){
         *str = '\0';
         return errno;
     }
-        
+       
     s = inet_ntoa(addr);
     memcpy(str, s, strlen(s)+1);
     return 0;
@@ -306,9 +305,12 @@ int sys_cmd_route_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **o
     int sys_rc = MOD_OK;
     int rc = 0;
     FILE *fd = NULL;
-    char t;
-    size_t buflen = 1024;
-    size_t buf_used = 0;
+    char *p;
+    char *err = NULL;
+    char *realloc_save;
+    char *buf = NULL;
+    size_t buf_len, buf_used, def_len;
+    char line[1024];
     char iface[32];
     char gateway[32];
     char dest[32];
@@ -316,15 +318,6 @@ int sys_cmd_route_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **o
     if ( access(ROUTE_PATH, R_OK) != 0 ){
         sys_rc = EPERM;
         if ( asprintf(out_str, "access:  %s", strerror(errno)) == -1 ){
-            err("asprintf: %s\n", strerror(errno));
-            *out_str = NULL;
-        }
-        goto done;
-    }
-
-    if ( !((*out_str) = (char*)malloc(buflen)) ){
-        sys_rc = errno;
-        if ( asprintf(out_str, "malloc:  %s", strerror(errno)) == -1 ){
             err("asprintf: %s\n", strerror(errno));
             *out_str = NULL;
         }
@@ -340,51 +333,99 @@ int sys_cmd_route_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **o
         goto done;
     }
 
-    **out_str = '\0';
-
-    while ( true ) {
-        while ( fgetc(fd) != '\n' ) {;}
-        t = fgetc(fd);
-        if ( feof(fd) != 0 )
-            break;
-        ungetc(t, fd);
-
-        rc = fscanf(fd, "%s\t%s\t%s\t", iface, dest, gateway);
-        if ( rc == 0 )
-            break;
-        else if ( rc < 0 ) {
-            sys_rc = errno;
-            if ( asprintf(out_str, "fscanf: %s", strerror(errno)) == -1 ){
-                err("asprintf: %s\n", strerror(errno));
-                *out_str = NULL;
-            }
-            goto done;
+    if ( !(buf = malloc(128)) ){
+        sys_rc = errno;
+        if ( asprintf(out_str, "malloc: %s", strerror(errno)) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
         }
+        goto done;
+    }
+    buf_len = 128;
+    buf_used = 1;
+    buf[0] = '\0';
+
+    /*
+     * Ignore the first line which is just table names.
+     */
+    while ( fgetc(fd) != '\n' && feof(fd) == 0 ) {;}
+
+    while ( fgets(line, 1024, fd) ){
+        if ( strnlen(line, 1023) >= 1023 ) {
+            sys_rc = EINVAL;
+            err = "Parse error, line too long";
+            break;
+        }
+
+        if ( !( p = strtok(line, "\t")) || strnlen(p, 31) >= 31 ){
+            sys_rc = EINVAL;
+            err = "Parse error, no iface";
+            break;
+        }
+        sprintf(iface, "%s", p);
         
+        if ( !( p = strtok(NULL, "\t")) || strnlen(p, 31) >= 31 ){
+            sys_rc = EINVAL;
+            err = "Parse error, no destination";
+            break;
+        }
+        sprintf(dest, "%s", p);
+         
+        if ( !( p = strtok(NULL, "\t")) || strnlen(p, 31) >= 31 ){
+            sys_rc = EINVAL;
+            err = "Parse error, no gateway";
+            break;
+        }
+        sprintf(gateway, "%s", p);
+
         ntoip_str(dest);
         ntoip_str(gateway);
 
-        if ( (buflen - buf_used - strlen(dest) - strlen(gateway) - strlen(iface) - 3) < 0 ) {
-            if ( !((*out_str) = realloc((*out_str), buflen + 1024)) ){
+        /* 'dest:gateway:iface\n' */
+        def_len = strlen(dest) + strlen(gateway) + strlen(iface) + 3;
+        if ( buf_len <  buf_used + def_len ) {
+            realloc_save = realloc(buf, buf_len+128+def_len);
+            if ( !realloc_save ){
                 sys_rc = errno;
-                free((*out_str));
+                free(buf);
                 if ( asprintf(out_str, "realloc: %s", strerror(errno)) == -1 ){
                     err("asprintf: %s\n", strerror(errno));
-                    *out_str = NULL;
                 }
                 goto done;
             }
+            buf = realloc_save;
+            buf_len += 128 + def_len;
         }
-        sprintf( (*out_str) + strlen((*out_str)), "%s:%s:%s\n", dest, gateway, iface);
-        buf_used += strlen(dest) + strlen(gateway) + strlen(iface) + 3;
+        
+        sprintf( buf+buf_used-1, "%s:%s:%s\n", dest, gateway, iface);
+        buf_used += def_len;
     }
-    
+   
+    if ( err != NULL ){
+        if ( asprintf(out_str, "%s", err) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    } 
+
+    if ( !(*out_str = strdup(buf)) ){
+        if ( asprintf(out_str, "strdup: %s", strerror(errno)) == -1 ){
+            err("asprintf: %s\n", strerror(errno));
+            *out_str = NULL;
+        }
+        goto done;
+    }
+    free(buf);
+    buf = NULL;
     fclose(fd);
     fd = NULL;
 
 done: 
     if ( fd )
         fclose(fd);
+    if ( buf )
+        free(buf);
     (*out_rc) = (uint16_t)sys_rc;
     return rc;
 }
@@ -471,7 +512,6 @@ int parse_nameservers(char *path, char **nameservers, char **out_str, bool *has_
     char ns[17];
     size_t nsl;
     int rc = 0;
-    char t;
 
     *has_localhost = false;
 
