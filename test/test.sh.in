@@ -242,6 +242,7 @@ run_daemon_tests() {
             || fail
     done
     echo "OK"
+    chmod +x ${op}
 }
 
 run_sys_tests() {
