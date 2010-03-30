@@ -391,7 +391,7 @@ int sys_cmd_route_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **o
     }
    
     if ( err != NULL ){
-        if ( asprintf(out_str, "%s", err) == -1 ){
+        if ( asprintf(out_str, "%s\n", err) == -1 ){
             err("asprintf: %s\n", strerror(errno));
             *out_str = NULL;
         }
@@ -565,7 +565,7 @@ int parse_nameservers(char *path, char **out_str, bool *has_localhost) {
     }
 
     if ( err != NULL ){
-        if ( asprintf(out_str, "%s", err) == -1 ){
+        if ( asprintf(out_str, "%s\n", err) == -1 ){
             err("asprintf: %s\n", strerror(errno));
             *out_str = NULL;
         }
