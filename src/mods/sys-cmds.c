@@ -487,6 +487,8 @@ int sys_cmd_ip_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **out_
 done:
     if ( sock > 0 )
         close(sock);
+    if ( ifreqs )
+        free(ifreqs);
     (*out_rc) = (uint16_t)sys_rc;
     return rc;
 }
