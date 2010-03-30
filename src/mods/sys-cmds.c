@@ -264,20 +264,15 @@ done:
 /* Network to IP address string */
 int ntoip_str(char *str){
     char *s = NULL;
-    struct in_addr addr = {(in_addr_t)0};
-    static char buf[32];
+    struct in_addr addr;
 
     if ( !str || strlen(str) < 8 || strlen(str) > 30 ){
         return EINVAL;
     }
-
-    sprintf(buf, "0x%s", str);
-    if ( inet_aton(buf, &addr) == 0 ){
-        *str = '\0';
+    errno = 0;
+    addr.s_addr = strtoul(str, NULL, 16);
+    if ( errno != 0 )
         return errno;
-    }
-      
-    addr.s_addr = ntohl(addr.s_addr);
     s = inet_ntoa(addr);
     memcpy(str, s, strlen(s)+1);
     return 0;
@@ -367,8 +362,13 @@ int sys_cmd_route_info(sysh_ctx_t syshc, char *value, uint16_t *out_rc, char **o
         }
         sprintf(gateway, "%s", p);
 
-        ntoip_str(dest);
-        ntoip_str(gateway);
+        if ( (rc = ntoip_str(dest)) != 0  || (rc = ntoip_str(gateway)) != 0 ){
+            sys_rc = rc;
+            if ( asprintf(&err, "ntoip_str: %s", strerror(rc)) == -1 ){
+                err = "Parse error, ntoip_str()";
+            }
+            break;
+        }
 
         /* 'dest:gateway:iface\n' */
         def_len = strlen(dest) + strlen(gateway) + strlen(iface) + 3;
